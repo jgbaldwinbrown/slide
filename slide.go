@@ -56,7 +56,7 @@ func (s *BedScanner) Scan() bool {
 		return false
 	}
 	s.CurEntry.Left--
-	s.CurEntry.Right, s.LastErr = strconv.ParseFloat(line[1], 64)
+	s.CurEntry.Right, s.LastErr = strconv.ParseFloat(line[2], 64)
 	if s.LastErr != nil {
 		return false
 	}
@@ -64,7 +64,7 @@ func (s *BedScanner) Scan() bool {
 	if line[2] == "-nan" {
 		s.CurEntry.Val = math.NaN()
 	} else {
-		s.CurEntry.Val, s.LastErr = strconv.ParseFloat(line[2], 64)
+		s.CurEntry.Val, s.LastErr = strconv.ParseFloat(line[3], 64)
 	}
 	if s.LastErr != nil {
 		return false
@@ -90,10 +90,12 @@ type Slider struct {
 	StepLen float64
 	Items *list.List
 	Scanner BedOutputScanner
+	Printed bool
+	Done bool
 }
 
 func NewSlider(b BedOutputScanner, size float64, step float64) Slider {
-	s := Slider{Size: size, StepLen: step, Scanner: b, Items: list.New()}
+	s := Slider{Size: size, StepLen: step, Scanner: b, Items: list.New(), Printed: true, Done: false}
 	s.Scanner.Scan()
 	return s
 }
@@ -101,8 +103,8 @@ func NewSlider(b BedOutputScanner, size float64, step float64) Slider {
 func (s *Slider) StartChrom() {
 	s.Chrom = s.Scanner.Entry().Chrom
 	s.Left = 0
-	s.Mid = (s.Left + s.Right) / 2
 	s.Right = s.Size
+	s.Mid = (s.Left + s.Right) / 2
 	for s.Items.Front() != nil {
 		s.Items.Remove(s.Items.Front())
 	}
@@ -123,11 +125,16 @@ func Ahead(query_left, query_right, subject_left, subject_right float64) bool {
 }
 
 func (s *Slider) State() ScannerState {
+	if s.Done && !s.Printed {
+		return DONE
+	}
+
 	if s.Scanner.Entry().Chrom != s.Chrom {
 		return NEW_CHROM
 	}
 
-	if s.Items.Front() != nil && s.Items.Front().Value.(BedEntry).Right <= s.Left {
+	// if s.Items.Front() != nil && s.Items.Front().Value.(BedEntry).Right <= s.Left {
+	if s.Items.Front() != nil && Behind(s.Items.Front().Value.(BedEntry).Left, s.Items.Front().Value.(BedEntry).Right, s.Left, s.Right) {
 		return STALE_ENTRIES
 	}
 
@@ -149,31 +156,61 @@ func (s *Slider) State() ScannerState {
 func (s *Slider) Step() bool {
 	if s.State() != NEW_CHROM {
 		s.Left += s.StepLen
+		s.Mid += s.StepLen
 		s.Right += s.StepLen
 	}
 	for true {
 		switch s.State() {
 		case STALE_ENTRIES:
+			fmt.Println("STALE_ENTRIES", s, s.Scanner.Entry())
 			s.Items.Remove(s.Items.Front())
+			s.Printed = false
 		case NEW_CHROM:
+			fmt.Println("NEW_CHROM", s, s.Scanner.Entry())
+			if s.Printed == false {
+				s.Printed = true
+				return true
+			}
 			s.StartChrom()
+			s.Printed = false
 		case IN_WINDOW:
+			fmt.Println("IN_WINDOW", s, s.Scanner.Entry())
 			s.Items.PushBack(s.Scanner.Entry())
 			ok := s.Scanner.Scan()
 			if !ok {
+				s.Done = true
+				if s.Printed == false {
+					s.Printed = true
+					return true
+				}
 				return ok
 			}
+			s.Printed = false
 		case BEHIND_WINDOW:
+			fmt.Println("BEHIND_WINDOW", s, s.Scanner.Entry())
 			ok := s.Scanner.Scan()
 			if !ok {
+				s.Done = true
+				if s.Printed == false {
+					s.Printed = true
+					return true
+				}
 				return ok
 			}
+			s.Printed = false
 		case AHEAD_OF_WINDOW:
+			fmt.Println("AHEAD_OF_WINDOW", s, s.Scanner.Entry())
+			s.Printed = true
 			return true
 		default:
-			return true
+			fmt.Println("default", s, s.Scanner.Entry())
+			s.Printed = true
+			s.Done = true
+			return false
 		}
 	}
+	s.Printed = true
+	s.Done = true
 	return false
 }
 
