@@ -10,6 +10,17 @@ import (
 	"io"
 )
 
+type ScannerState int64
+
+const (
+	AHEAD_OF_WINDOW ScannerState = iota
+	BEHIND_WINDOW
+	IN_WINDOW
+	NEW_CHROM
+	STALE_ENTRIES
+	DONE
+)
+
 type BedEntry struct {
 	Chrom string
 	Left float64
@@ -97,41 +108,73 @@ func (s *Slider) StartChrom() {
 	}
 }
 
-func (s *Slider) Step() bool {
+func Intersect(query_left, query_right, subject_left, subject_right float64) bool {
+	right_edge := math.Min(query_right, subject_right)
+	left_edge := math.Max(query_left, subject_left)
+	return left_edge < right_edge
+}
+
+func Behind(query_left, query_right, subject_left, subject_right float64) bool {
+	return query_right <= subject_left
+}
+
+func Ahead(query_left, query_right, subject_left, subject_right float64) bool {
+	return query_left >= subject_right
+}
+
+func (s *Slider) State() ScannerState {
 	if s.Scanner.Entry().Chrom != s.Chrom {
-		s.StartChrom()
-	}
-	for s.Items.Front() != nil && s.Items.Front().Value.(BedEntry).Right <= s.Left {
-		s.Items.Remove(s.Items.Front())
-	}
-	for s.Scanner.Entry().Chrom == s.Chrom && s.Scanner.Entry().Right <= s.Left {
-		ok := s.Scanner.Scan()
-		if !ok {
-			return ok
-		}
+		return NEW_CHROM
 	}
 
+	if s.Items.Front() != nil && s.Items.Front().Value.(BedEntry).Right <= s.Left {
+		return STALE_ENTRIES
+	}
 
-	for s.Scanner.Entry().Chrom == s.Chrom && s.Scanner.Entry().Left >= s.Right {
+	if Intersect(s.Scanner.Entry().Left, s.Scanner.Entry().Right, s.Left, s.Right) {
+		return IN_WINDOW
+	}
+
+	if Behind(s.Scanner.Entry().Left, s.Scanner.Entry().Right, s.Left, s.Right) {
+		return BEHIND_WINDOW
+	}
+
+	if Ahead(s.Scanner.Entry().Left, s.Scanner.Entry().Right, s.Left, s.Right) {
+		return AHEAD_OF_WINDOW
+	}
+
+	return DONE
+}
+
+func (s *Slider) Step() bool {
+	if s.State() != NEW_CHROM {
 		s.Left += s.StepLen
 		s.Right += s.StepLen
 	}
-	if s.Scanner.Entry().Chrom != s.Chrom {
-		s.StartChrom()
-	}
-
-	for math.Max(s.Scanner.Entry().Left, s.Left) <= math.Min(s.Scanner.Entry().Right, s.Right) {
-		s.Items.PushBack(s.Scanner.Entry())
-		ok := s.Scanner.Scan()
-		if !ok {
-			return ok
-		}
-		for s.Scanner.Entry().Chrom != s.Chrom {
+	for true {
+		switch s.State() {
+		case STALE_ENTRIES:
+			s.Items.Remove(s.Items.Front())
+		case NEW_CHROM:
 			s.StartChrom()
+		case IN_WINDOW:
+			s.Items.PushBack(s.Scanner.Entry())
+			ok := s.Scanner.Scan()
+			if !ok {
+				return ok
+			}
+		case BEHIND_WINDOW:
+			ok := s.Scanner.Scan()
+			if !ok {
+				return ok
+			}
+		case AHEAD_OF_WINDOW:
+			return true
+		default:
+			return true
 		}
 	}
-
-	return true
+	return false
 }
 
 func (s *Slider) Mean() (float64, error) {
