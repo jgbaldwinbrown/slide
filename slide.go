@@ -205,11 +205,9 @@ func (s *Slider) Step() bool {
 	for true {
 		switch s.State() {
 		case STALE_ENTRIES:
-			fmt.Println("STALE_ENTRIES", s, s.Scanner.Entry())
 			s.Items.Remove(s.Items.Front())
 			s.Printed = false
 		case NEW_CHROM:
-			fmt.Println("NEW_CHROM", s, s.Scanner.Entry())
 			if s.Printed == false {
 				s.Printed = true
 				return true
@@ -217,7 +215,6 @@ func (s *Slider) Step() bool {
 			s.StartChrom()
 			s.Printed = false
 		case IN_WINDOW:
-			fmt.Println("IN_WINDOW", s, s.Scanner.Entry())
 			s.Items.PushBack(s.Scanner.Entry())
 			ok := s.Scanner.Scan()
 			if !ok {
@@ -230,7 +227,6 @@ func (s *Slider) Step() bool {
 			}
 			s.Printed = false
 		case BEHIND_WINDOW:
-			fmt.Println("BEHIND_WINDOW", s, s.Scanner.Entry())
 			ok := s.Scanner.Scan()
 			if !ok {
 				s.Done = true
@@ -242,11 +238,9 @@ func (s *Slider) Step() bool {
 			}
 			s.Printed = false
 		case AHEAD_OF_WINDOW:
-			fmt.Println("AHEAD_OF_WINDOW", s, s.Scanner.Entry())
 			s.Printed = true
 			return true
 		default:
-			fmt.Println("default", s, s.Scanner.Entry())
 			s.Printed = true
 			s.Done = true
 			return false
