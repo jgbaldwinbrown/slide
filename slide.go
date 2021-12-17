@@ -26,6 +26,7 @@ type BedEntry struct {
 	Left float64
 	Right float64
 	Val float64
+	Other interface{}
 }
 
 type BedScanner struct {
@@ -50,22 +51,24 @@ func (s *BedScanner) Scan() bool {
 		return ok
 	}
 	line := s.Scanner.Line()
+
 	s.CurEntry.Chrom = line[0]
+
 	s.CurEntry.Left, s.LastErr = strconv.ParseFloat(line[1], 64)
 	if s.LastErr != nil {
 		return false
 	}
-	s.CurEntry.Left--
 	s.CurEntry.Right, s.LastErr = strconv.ParseFloat(line[2], 64)
 	if s.LastErr != nil {
 		return false
 	}
 
-	if line[2] == "-nan" {
+	if line[3] == "-nan" {
 		s.CurEntry.Val = math.NaN()
 	} else {
 		s.CurEntry.Val, s.LastErr = strconv.ParseFloat(line[3], 64)
 	}
+
 	if s.LastErr != nil {
 		return false
 	}
@@ -73,6 +76,46 @@ func (s *BedScanner) Scan() bool {
 }
 
 func (s *BedScanner) Entry() BedEntry {
+	return s.CurEntry
+}
+
+type SyncScanner struct {
+	Scanner *fasttsv.Scanner
+	CurEntry BedEntry
+	LastErr error
+}
+
+func NewSyncScanner(s *fasttsv.Scanner) *SyncScanner {
+	b := &SyncScanner{Scanner: s}
+	b.Scan()
+	return b
+}
+
+func (s *SyncScanner) Scan() bool {
+	ok := s.Scanner.Scan()
+	if !ok {
+		return ok
+	}
+	line := s.Scanner.Line()
+	s.CurEntry.Chrom = line[0]
+	s.CurEntry.Left, s.LastErr = strconv.ParseFloat(line[1], 64)
+	if s.LastErr != nil {
+		return false
+	}
+	s.CurEntry.Left--
+	s.CurEntry.Right, s.LastErr = strconv.ParseFloat(line[1], 64)
+	if s.LastErr != nil {
+		return false
+	}
+	s.CurEntry.Val = 1
+
+	if s.LastErr != nil {
+		return false
+	}
+	return true
+}
+
+func (s *SyncScanner) Entry() BedEntry {
 	return s.CurEntry
 }
 
@@ -225,6 +268,17 @@ func (s *Slider) Mean() (float64, error) {
 	return stats.Mean(vals)
 }
 
+func (s *Slider) Sum() (float64, error) {
+	var vals []float64
+	for elem := s.Items.Back(); elem != nil; elem = elem.Prev() {
+		v := elem.Value.(BedEntry).Val
+		if ! math.IsNaN(v) {
+			vals = append(vals, elem.Value.(BedEntry).Val)
+		}
+	}
+	return stats.Sum(vals)
+}
+
 func (s *Slider) WriteWindow(w LineWriter) {
 	mean, err := s.Mean()
 	if err == nil {
@@ -234,8 +288,28 @@ func (s *Slider) WriteWindow(w LineWriter) {
 	}
 }
 
+func (s *Slider) WriteWindowSum(w LineWriter) {
+	sum, err := s.Sum()
+	if err == nil {
+		w.Write([]string{s.Chrom, fmt.Sprintf("%d", int(s.Left)), fmt.Sprintf("%d", int(s.Right)), fmt.Sprintf("%g", sum)})
+	} else {
+		w.Write([]string{s.Chrom, fmt.Sprintf("%d", int(s.Left)), fmt.Sprintf("%d", int(s.Right)), "NA"})
+	}
+}
+
 func SlidingMeans(inconn io.Reader, outconn io.Writer, size float64, step float64) {
 	b := NewBedScanner(fasttsv.NewScanner(inconn))
+	s := NewSlider(b, size, step)
+	w := fasttsv.NewWriter(outconn)
+	defer w.Flush()
+
+	for s.Step() {
+		s.WriteWindow(w)
+	}
+}
+
+func SlidingSyncSums(inconn io.Reader, outconn io.Writer, size float64, step float64) {
+	b := NewSyncScanner(fasttsv.NewScanner(inconn))
 	s := NewSlider(b, size, step)
 	w := fasttsv.NewWriter(outconn)
 	defer w.Flush()
