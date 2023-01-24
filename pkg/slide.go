@@ -273,6 +273,20 @@ func (s *Slider) Sum() (float64, error) {
 	return stats.Sum(vals)
 }
 
+func (s *Slider) MeanEntry() (BedEntry, error) {
+	out := BedEntry {
+		Left: s.Left,
+		Right: s.Right,
+		Chrom: s.Chrom,
+	}
+	mean, err := s.Mean()
+	if err != nil {
+		return out, err
+	}
+	out.Val = mean
+	return out, nil
+}
+
 func (s *Slider) WriteWindow(w LineWriter) {
 	mean, err := s.Mean()
 	if err == nil {
