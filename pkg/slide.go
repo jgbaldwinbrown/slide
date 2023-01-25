@@ -10,16 +10,16 @@ import (
 	"io"
 )
 
-type ScannerState int64
-
-const (
-	AHEAD_OF_WINDOW ScannerState = iota
-	BEHIND_WINDOW
-	IN_WINDOW
-	NEW_CHROM
-	STALE_ENTRIES
-	DONE
-)
+// type ScannerState int64
+// 
+// const (
+// 	AHEAD_OF_WINDOW ScannerState = iota
+// 	BEHIND_WINDOW
+// 	IN_WINDOW
+// 	NEW_CHROM
+// 	STALE_ENTRIES
+// 	DONE
+// )
 
 type BedEntry struct {
 	Chrom string
@@ -41,7 +41,7 @@ type LineWriter interface {
 
 func NewBedScanner(s *fasttsv.Scanner) *BedScanner {
 	b := &BedScanner{Scanner: s}
-	b.Scan()
+	// b.Scan()
 	return b
 }
 
@@ -133,123 +133,211 @@ type Slider struct {
 	StepLen float64
 	Items *list.List
 	Scanner BedOutputScanner
-	Printed bool
-	Done bool
+	Unused *list.List
+	StartingChrom bool
+	DoneReading bool
+	DoneOutputting bool
 }
 
 func NewSlider(b BedOutputScanner, size float64, step float64) Slider {
-	s := Slider{Size: size, StepLen: step, Scanner: b, Items: list.New(), Printed: true, Done: false}
-	s.Scanner.Scan()
+	s := Slider{Size: size, StepLen: step, Scanner: b, Items: list.New(), DoneReading: false, DoneOutputting: false, StartingChrom: true, Unused: list.New()}
 	return s
 }
 
-func (s *Slider) StartChrom() {
-	s.Chrom = s.Scanner.Entry().Chrom
-	s.Left = 0
-	s.Right = s.Size
-	s.Mid = (s.Left + s.Right) / 2
-	for s.Items.Front() != nil {
-		s.Items.Remove(s.Items.Front())
+func (s *Slider) RemoveOlds() {
+	var next *list.Element
+	for n := s.Items.Front(); n != nil; n = next {
+		next = n.Next()
+		v := n.Value.(BedEntry)
+		if s.Chrom != v.Chrom || !Intersect(v.Left, v.Right, s.Left, s.Right) {
+			// fmt.Printf("winchr: %v; winleft: %v; winright: %v; removing entry %v\n", s.Chrom, s.Left, s.Right, v)
+			s.Items.Remove(n);
+		}
 	}
 }
 
-func Intersect(query_left, query_right, subject_left, subject_right float64) bool {
-	right_edge := math.Min(query_right, subject_right)
-	left_edge := math.Max(query_left, subject_left)
-	return left_edge < right_edge
+func (s *Slider) ScanOne() (keepGoing bool) {
+	// fmt.Printf("scanning line\n")
+	ok := s.Scanner.Scan()
+	if !ok {
+		s.DoneReading = true
+		return false
+	}
+	e := s.Scanner.Entry()
+	// fmt.Printf("scanned %v\n", e)
+	s.Unused.PushBack(e)
+
+	if s.Chrom != e.Chrom {
+		// fmt.Printf("s.Chrom %v != e.Chrom %v\n", s.Chrom, e.Chrom)
+		if !s.StartingChrom {
+			// fmt.Printf("set StartingChrom to true\n")
+			s.StartingChrom = true
+			return false
+		}
+		// fmt.Printf("set StartingChrom to false\n")
+		s.StartingChrom = false
+		s.Chrom = e.Chrom
+		s.Left = 0
+		s.Right = s.Left + s.Size
+		s.Mid = (s.Left + s.Right) / 2
+	}
+
+	notahead_and_samechrom := s.Chrom == e.Chrom && !Ahead(e.Left, e.Right, s.Left, s.Right)
+	// fmt.Printf("notahead_and_samechrom: %v\n", notahead_and_samechrom)
+	return notahead_and_samechrom
 }
 
-func Behind(query_left, query_right, subject_left, subject_right float64) bool {
-	return query_right <= subject_left
-}
-
-func Ahead(query_left, query_right, subject_left, subject_right float64) bool {
-	return query_left >= subject_right
-}
-
-func (s *Slider) State() ScannerState {
-	if s.Done && !s.Printed {
-		return DONE
+func (s *Slider) AddAllUnused() {
+	var next *list.Element
+	for n := s.Unused.Front(); n != nil; n = next {
+		next = n.Next()
+		entry := n.Value.(BedEntry)
+		if Intersect(entry.Left, entry.Right, s.Left, s.Right) {
+			// fmt.Printf("winchr: %v; winleft: %v; winright: %v; adding entry %v\n", s.Chrom, s.Left, s.Right, entry)
+			s.Items.PushBack(entry)
+			s.Unused.Remove(n)
+		}
 	}
-
-	if s.Scanner.Entry().Chrom != s.Chrom {
-		return NEW_CHROM
-	}
-
-	// if s.Items.Front() != nil && s.Items.Front().Value.(BedEntry).Right <= s.Left {
-	if s.Items.Front() != nil && Behind(s.Items.Front().Value.(BedEntry).Left, s.Items.Front().Value.(BedEntry).Right, s.Left, s.Right) {
-		return STALE_ENTRIES
-	}
-
-	if Intersect(s.Scanner.Entry().Left, s.Scanner.Entry().Right, s.Left, s.Right) {
-		return IN_WINDOW
-	}
-
-	if Behind(s.Scanner.Entry().Left, s.Scanner.Entry().Right, s.Left, s.Right) {
-		return BEHIND_WINDOW
-	}
-
-	if Ahead(s.Scanner.Entry().Left, s.Scanner.Entry().Right, s.Left, s.Right) {
-		return AHEAD_OF_WINDOW
-	}
-
-	return DONE
 }
 
 func (s *Slider) Step() bool {
-	if s.State() != NEW_CHROM {
-		s.Left += s.StepLen
-		s.Mid += s.StepLen
-		s.Right += s.StepLen
+	if s.DoneReading {
+		s.DoneOutputting = true
 	}
-	for true {
-		switch s.State() {
-		case STALE_ENTRIES:
-			s.Items.Remove(s.Items.Front())
-			s.Printed = false
-		case NEW_CHROM:
-			if s.Printed == false {
-				s.Printed = true
-				return true
-			}
-			s.StartChrom()
-			s.Printed = false
-		case IN_WINDOW:
-			s.Items.PushBack(s.Scanner.Entry())
-			ok := s.Scanner.Scan()
-			if !ok {
-				s.Done = true
-				if s.Printed == false {
-					s.Printed = true
-					return true
-				}
-				return ok
-			}
-			s.Printed = false
-		case BEHIND_WINDOW:
-			ok := s.Scanner.Scan()
-			if !ok {
-				s.Done = true
-				if s.Printed == false {
-					s.Printed = true
-					return true
-				}
-				return ok
-			}
-			s.Printed = false
-		case AHEAD_OF_WINDOW:
-			s.Printed = true
-			return true
-		default:
-			s.Printed = true
-			s.Done = true
-			return false
-		}
-	}
-	s.Printed = true
-	s.Done = true
-	return false
+	s.Left += s.StepLen
+	s.Right = s.Left + s.Size
+	s.Mid = (s.Left + s.Right) / 2
+
+	// fmt.Printf("starting step for chr %v, left %v, right %v\n", s.Chrom, s.Left, s.Right)
+
+	for notDone := s.ScanOne(); notDone; notDone = s.ScanOne() {}
+	s.AddAllUnused()
+
+	// for notDone := s.ScanOne(); notDone; notDone = s.ScanOne() {
+	// 	s.AddAllUnused()
+	// }
+	// if s.StartingChrom || s.Done {
+	// 	s.AddAllUnused()
+	// }
+
+	s.RemoveOlds()
+
+	return !s.DoneOutputting
 }
+
+// func  (s *Slider) StartChrom() {
+// 	 s.Chrom = s.Scanner.Entry().Chrom
+// 	 s.Left = 0
+// 	 s.Right = s.Size
+// 	 s.Mid = (s.Left + s.Right) / 2
+// 	}for s.Items.Front() != nil {
+// 	 	s.Items.Remove(s.Items.Front())
+// 	f}
+// }     
+//       
+
+func  Intersect(query_left, query_right, subject_left, subject_right float64) bool {
+	right_edge := math.Min(query_right, subject_right)
+	left_edge := math.Max(query_left, subject_left)
+	intersected := left_edge < right_edge
+	// fmt.Printf("query: %v %v; subject: %v %v; intersected: %v\n", query_left, query_right, subject_left, subject_right, intersected)
+	return intersected
+}
+
+//      }
+// func  Behind(query_left, query_right, subject_left, subject_right float64) bool {
+// 	freturn query_right <= subject_left
+// }     
+//      }
+
+func  Ahead(query_left, query_right, subject_left, subject_right float64) bool {
+	return query_left >= subject_right
+}
+
+//       
+// func  (s *Slider) State() ScannerState {
+// 	 if s.Done && !s.Printed {
+// 	 	return DONE
+// 	 }
+//       
+// 	 if s.Scanner.Entry().Chrom != s.Chrom {
+// 	 	return NEW_CHROM
+// 	 }
+//       
+// 	 // if s.Items.Front() != nil && s.Items.Front().Value.(BedEntry).Right <= s.Left {
+// 	 if s.Items.Front() != nil && Behind(s.Items.Front().Value.(BedEntry).Left, s.Items.Front().Value.(BedEntry).Right, s.Left, s.Right) {
+// 	 	return STALE_ENTRIES
+// 	 }
+//       
+// 	 if Intersect(s.Scanner.Entry().Left, s.Scanner.Entry().Right, s.Left, s.Right) {
+// 	 	return IN_WINDOW
+// 	 }
+//       
+// 	 if Behind(s.Scanner.Entry().Left, s.Scanner.Entry().Right, s.Left, s.Right) {
+// 	 	return BEHIND_WINDOW
+// 	 }
+//       
+// 	 if Ahead(s.Scanner.Entry().Left, s.Scanner.Entry().Right, s.Left, s.Right) {
+// 	 	return AHEAD_OF_WINDOW
+// 	}}
+//      
+// 	freturn DONE
+// }     
+//       
+// func  (s *Slider) Step() bool {
+// 	 if s.State() != NEW_CHROM {
+// 	 	s.Left += s.StepLen
+// 	 	s.Mid += s.StepLen
+// 	 	s.Right += s.StepLen
+// 	 }
+// 	 for true {
+// 	 	switch s.State() {
+// 	 	case STALE_ENTRIES:
+// 	 		s.Items.Remove(s.Items.Front())
+// 	 		s.Printed = false
+// 	 	case NEW_CHROM:
+// 	 		if s.Printed == false {
+// 	 			s.Printed = true
+// 	 			return true
+// 	 		}
+// 	 		s.StartChrom()
+// 	 		s.Printed = false
+// 	 	case IN_WINDOW:
+// 	 		s.Items.PushBack(s.Scanner.Entry())
+// 	 		ok := s.Scanner.Scan()
+// 	 		if !ok {
+// 	 			s.Done = true
+// 	 			if s.Printed == false {
+// 	 				s.Printed = true
+// 	 				return true
+// 	 			}
+// 	 			return ok
+// 	 		}
+// 	 		s.Printed = false
+// 	 	case BEHIND_WINDOW:
+// 	 		ok := s.Scanner.Scan()
+// 	 		if !ok {
+// 	 			s.Done = true
+// 	 			if s.Printed == false {
+// 	 				s.Printed = true
+// 	 				return true
+// 	 			}
+// 	 			return ok
+// 	 		}
+// 	 		s.Printed = false
+// 	 	case AHEAD_OF_WINDOW:
+// 	 		s.Printed = true
+// 	 		return true
+// 	 	default:
+// 	 		s.Printed = true
+// 	 		s.Done = true
+// 	 		return false
+// 	 	}
+// 	 }
+// 	}s.Printed = true
+// 	s.Done = true
+// 	return false
+// }
 
 func (s *Slider) Mean() (float64, error) {
 	var vals []float64
@@ -258,6 +346,9 @@ func (s *Slider) Mean() (float64, error) {
 		if ! math.IsNaN(v) {
 			vals = append(vals, elem.Value.(BedEntry).Val)
 		}
+	}
+	if len(vals) < 1 {
+		return math.NaN(), nil
 	}
 	return stats.Mean(vals)
 }

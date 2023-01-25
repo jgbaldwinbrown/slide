@@ -31,7 +31,7 @@ chr1	2	3	1
 chr1	3	4	1
 chr1	4	5	1`
 
-var in4 = `chr1	0	30	3
+var in4 = `chr1	0	10	3
 chr1	30	45	7
 chr1	40	50	5`
 
@@ -118,25 +118,25 @@ var expect3 = []BedEntry {
 		Chrom: "chr1",
 		Left: 0,
 		Right: 2,
-		Val: 3,
+		Val: 2,
 	},
 	BedEntry {
 		Chrom: "chr1",
 		Left: 1,
 		Right: 3,
-		Val: 3,
+		Val: 2,
 	},
 	BedEntry {
 		Chrom: "chr1",
 		Left: 2,
 		Right: 4,
-		Val: 3,
+		Val: 2,
 	},
 	BedEntry {
 		Chrom: "chr1",
 		Left: 3,
 		Right: 5,
-		Val: 3,
+		Val: 1,
 	},
 }
 
@@ -145,7 +145,7 @@ var expect4 = []BedEntry {
 		Chrom: "chr1",
 		Left: 0,
 		Right: 40,
-		Val: 2,
+		Val: 5,
 	},
 	BedEntry {
 		Chrom: "chr1",
@@ -205,6 +205,7 @@ func MeansTest(in string, size float64, step float64) []BedEntry {
 	var out []BedEntry
 
 	for s.Step() {
+		// fmt.Printf("current item count: %v\n\n\n", s.Items.Len())
 		e, err := s.MeanEntry()
 		if err != nil {
 			panic(err)
@@ -218,7 +219,8 @@ func TestSlide(t *testing.T) {
 	for _, test := range Tests {
 		test := test
 		t.Run(test.Name, func(t *testing.T) {
-			t.Parallel()
+			// fmt.Printf("Starting test %v\n", test.Name)
+			// t.Parallel()
 			out := test.Func(test.In, test.Winsize, test.Winstep)
 			if !reflect.DeepEqual(out, test.Expect) {
 				t.Errorf("out %v != expect %v", out, test.Expect)
