@@ -17,3 +17,5 @@ cp ./scripts/fst_sliding_window ~/mybin
 cp ./scripts/cov_sliding_window ~/mybin
 cp ./scripts/bedspan ~/mybin
 cp ./cmd/lib_fst_sliding_window ~/mybin
+cp ./cmd/slide_gff_entry_count ~/mybin
+cp ./cmd/slide_gff_bp_covered ~/mybin

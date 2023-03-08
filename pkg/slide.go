@@ -39,6 +39,12 @@ type LineWriter interface {
 	Write([]string)
 }
 
+func NewBedReaderScanner(r io.Reader) *BedScanner {
+	ls := fasttsv.NewScanner(r)
+	b := NewBedScanner(ls)
+	return b
+}
+
 func NewBedScanner(s *fasttsv.Scanner) *BedScanner {
 	b := &BedScanner{Scanner: s}
 	// b.Scan()
@@ -77,6 +83,25 @@ func (s *BedScanner) Scan() bool {
 
 func (s *BedScanner) Entry() BedEntry {
 	return s.CurEntry
+}
+
+type BedEntryScanner struct {
+	Chan <-chan BedEntry
+	Current BedEntry
+}
+
+func NewBedEntryScanner(channel <-chan BedEntry) *BedEntryScanner {
+	return &BedEntryScanner{ Chan: channel }
+}
+
+func (s *BedEntryScanner) Scan() bool {
+	var ok bool
+	s.Current, ok = <-s.Chan
+	return ok
+}
+
+func (s *BedEntryScanner) Entry() BedEntry {
+	return s.Current
 }
 
 type SyncScanner struct {
@@ -372,7 +397,7 @@ func (s *Slider) MeanEntry() (BedEntry, error) {
 	}
 	mean, err := s.Mean()
 	if err != nil {
-		return out, err
+		return BedEntry{}, err
 	}
 	out.Val = mean
 	return out, nil
@@ -405,6 +430,23 @@ func SlidingMeans(inconn io.Reader, outconn io.Writer, size float64, step float6
 	for s.Step() {
 		s.WriteWindow(w)
 	}
+}
+
+func SlidingEntryMeans(in BedOutputScanner, size float64, step float64) <-chan BedEntry {
+	s := NewSlider(in, size, step)
+	out := make(chan BedEntry, 256)
+
+	go func() {
+		for s.Step() {
+			entry, e := s.MeanEntry()
+			if e != nil {
+				panic(e)
+			}
+			out <- entry
+		}
+		close(out)
+	}()
+	return out
 }
 
 func SlidingSyncSums(inconn io.Reader, outconn io.Writer, size float64, step float64) {
